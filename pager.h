@@ -171,20 +171,6 @@ void db_close(Table *table)
     pager->pages[i] = NULL;
   }
 
-  // There may be a partial page to write to the end of the file
-  // This should not be needed after we switch to a B-tree
-  // uint32_t num_additional_rows = table->num_rows % ROWS_PER_PAGE;
-  // if (num_additional_rows > 0)
-  // {
-  //   uint32_t page_num = num_full_pages;
-  //   if (pager->pages[page_num] != NULL)
-  //   {
-  //     pager_flush(pager, page_num, num_additional_rows * ROW_SIZE);
-  //     free(pager->pages[page_num]);
-  //     pager->pages[page_num] = NULL;
-  //   }
-  // }
-
   int result = close(pager->file_descriptor);
   if (result == -1)
   {

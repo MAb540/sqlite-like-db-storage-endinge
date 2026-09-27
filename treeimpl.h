@@ -9,6 +9,8 @@ typedef enum
   NODE_LEAF
 } NodeType;
 
+#define INVALID_PAGE_NUM UINT32_MAX
+
 const uint32_t NODE_TYPE_SIZE = sizeof(uint8_t);
 const uint32_t NODE_TYPE_OFFSET = 0;
 
@@ -26,8 +28,6 @@ const uint8_t COMMON_NODE_HEADER_SIZE =
  */
 const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
-// const uint32_t LEAF_NODE_HEADER_SIZE =
-//     COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE;
 
 const uint32_t LEAF_NODE_NEXT_LEAF_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_NEXT_LEAF_OFFSET =
@@ -48,8 +48,8 @@ const uint32_t LEAF_NODE_VALUE_OFFSET =
 
 const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
 const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
-const uint32_t LEAF_NODE_MAX_CELLS =
-    LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
+const uint32_t LEAF_NODE_MAX_CELLS = 4;
+    // LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
 
 const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
 const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT =
@@ -75,11 +75,6 @@ void *leaf_node_value(void *node, uint32_t cell_num)
   return leaf_node_cell(node, cell_num) + LEAF_NODE_KEY_SIZE;
 }
 
-// void initialize_leaf_node(void *node) {
-//     // *leaf_node_num_cells(node) = 0;
-//     uint32_t *leaf_node_pointer = leaf_node_num_cells(node) ;
-//     *leaf_node_pointer = 0;
-// }
 
 NodeType get_node_type(void *node)
 {
@@ -111,28 +106,6 @@ void initialize_leaf_node(void *node)
   *leaf_node_num_cells(node) = 0;
   *leaf_node_next_leaf(node) = 0;
 }
-
-// void leaf_node_insert(Cursor* cursor, uint32_t key, ROW* value) {
-//   void* node = get_page(cursor->table->pager, cursor->page_num);
-
-//   uint32_t num_cells = *leaf_node_num_cells(node);
-//   if (num_cells >= LEAF_NODE_MAX_CELLS) {
-//     printf("Need to implement splitting a leaf node.\n");
-//     exit(EXIT_FAILURE);
-//   }
-
-//   if (cursor->cell_num < num_cells) {
-//     // Make room for new cell
-//     for (uint32_t i = num_cells; i > cursor->cell_num; i--) {
-//       memcpy(leaf_node_cell(node, i), leaf_node_cell(node, i - 1),
-//              LEAF_NODE_CELL_SIZE);
-//     }
-//   }
-
-//   *(leaf_node_num_cells(node)) += 1;
-//   *(leaf_node_key(node, cursor->cell_num)) = key;
-//   serialize_row(value, leaf_node_value(node, cursor->cell_num));
-// }
 
 /*
  * Internal Node Header Layout
@@ -181,21 +154,28 @@ uint32_t *internal_node_child(void *node, uint32_t child_num)
   }
   else if (child_num == num_keys)
   {
-    return internal_node_right_child(node);
+    // return internal_node_right_child(node);
+        uint32_t* right_child = internal_node_right_child(node);
+    if (*right_child == INVALID_PAGE_NUM) {
+      printf("Tried to access right child of node, but was invalid page\n");
+      exit(EXIT_FAILURE);
+    }
+    return right_child;
   }
   else
   {
-    return internal_node_cell(node, child_num);
+    // return internal_node_cell(node, child_num);
+    uint32_t* child = internal_node_cell(node, child_num);
+    if (*child == INVALID_PAGE_NUM) {
+      printf("Tried to access child %d of node, but was invalid page\n", child_num);
+      exit(EXIT_FAILURE);
+    }
+    return child;
   }
 }
 
 uint32_t *internal_node_key(void *node, uint32_t key_num)
 {
-  // return internal_node_cell(node, key_num) + INTERNAL_NODE_CHILD_SIZE;
-  // uint32_t internal_node_cell_offset = *internal_node_cell(node, key_num);
-  // return internal_node_cell_offset + INTERNAL_NODE_CHILD_SIZE;
-  // return (void*)internal_node_cell(node, key_num) + INTERNAL_NODE_CHILD_SIZE;
-
     // 1. Get the cell pointer as a byte pointer (uint8_t*)
     uint8_t *cell_ptr = (uint8_t *)internal_node_cell(node, key_num);
     
@@ -211,18 +191,36 @@ void initialize_internal_node(void *node)
   set_node_type(node, NODE_INTERNAL);
   set_node_root(node, false);
   *internal_node_num_keys(node) = 0;
+
+  /*
+  Necessary because the root page number is 0; by not initializing an internal 
+  node's right child to an invalid page number when initializing the node, we may
+  end up with 0 as the node's right child, which makes the node a parent of the root
+  */
+  *internal_node_right_child(node) = INVALID_PAGE_NUM;
 }
 
-uint32_t get_node_max_key(void *node)
-{
-  switch (get_node_type(node))
-  {
-  case NODE_INTERNAL:
-    return *internal_node_key(node, *internal_node_num_keys(node) - 1);
-  case NODE_LEAF:
+// uint32_t get_node_max_key(void *node)
+// {
+//   switch (get_node_type(node))
+//   {
+//   case NODE_INTERNAL:
+//     return *internal_node_key(node, *internal_node_num_keys(node) - 1);
+//   case NODE_LEAF:
+//     return *leaf_node_key(node, *leaf_node_num_cells(node) - 1);
+//   }
+// }
+
+uint32_t get_node_max_key(Pager* pager, void* node) {
+  if (get_node_type(node) == NODE_LEAF) {
     return *leaf_node_key(node, *leaf_node_num_cells(node) - 1);
   }
+  
+  void* right_child = get_page(pager, *internal_node_right_child(node));
+  return get_node_max_key(pager, right_child);
 }
+
+
 
 bool is_node_root(void *node)
 {
@@ -237,37 +235,6 @@ void indent(uint32_t level)
     printf("  ");
   }
 }
-
-// void print_tree(Pager* pager, uint32_t page_num, uint32_t indentation_level) {
-//   void* node = get_page(pager, page_num);
-//   uint32_t num_keys, child;
-
-//   switch (get_node_type(node)) {
-//     case (NODE_LEAF):
-//       num_keys = *leaf_node_num_cells(node);
-//       indent(indentation_level);
-//       printf("- leaf (size %d)\n", num_keys);
-//       for (uint32_t i = 0; i < num_keys; i++) {
-//         indent(indentation_level + 1);
-//         printf("- %d\n", *leaf_node_key(node, i));
-//       }
-//       break;
-//     case (NODE_INTERNAL):
-//       num_keys = *internal_node_num_keys(node);
-//       indent(indentation_level);
-//       printf("- internal (size %d)\n", num_keys);
-//       for (uint32_t i = 0; i < num_keys; i++) {
-//         child = *internal_node_child(node, i);
-//         print_tree(pager, child, indentation_level + 1);
-
-//         indent(indentation_level + 1);
-//         printf("- key %d\n", *internal_node_key(node, i));
-//       }
-//       child = *internal_node_right_child(node);
-//       print_tree(pager, child, indentation_level + 1);
-//       break;
-//   }
-// }
 
 void print_tree(Pager *pager, uint32_t page_num, uint32_t indentation_level)
 {
@@ -352,43 +319,8 @@ void update_internal_node_key(void* node, uint32_t old_key, uint32_t new_key) {
 }
 
 const uint32_t INTERNAL_NODE_MAX_CELLS = 3;
+const uint32_t INTERNAL_NODE_MAX_KEYS = 3;
 
-void internal_node_insert(Table* table, uint32_t parent_page_num,
-                          uint32_t child_page_num) {
-  /*
-+  Add a new child/key pair to parent that corresponds to child
-+  */
 
-  void* parent = get_page(table->pager, parent_page_num);
-  void* child = get_page(table->pager, child_page_num);
-  uint32_t child_max_key = get_node_max_key(child);
-  uint32_t index = internal_node_find_child(parent, child_max_key);
 
-  uint32_t original_num_keys = *internal_node_num_keys(parent);
-  *internal_node_num_keys(parent) = original_num_keys + 1;
 
-  if (original_num_keys >= INTERNAL_NODE_MAX_CELLS) {
-    printf("Need to implement splitting internal node\n");
-    exit(EXIT_FAILURE);
-  }
-
-  uint32_t right_child_page_num = *internal_node_right_child(parent);
-  void* right_child = get_page(table->pager, right_child_page_num);
-
-  if (child_max_key > get_node_max_key(right_child)) {
-    /* Replace right child */
-    *internal_node_child(parent, original_num_keys) = right_child_page_num;
-    *internal_node_key(parent, original_num_keys) =
-        get_node_max_key(right_child);
-    *internal_node_right_child(parent) = child_page_num;
-  } else {
-    /* Make room for the new cell */
-    for (uint32_t i = original_num_keys; i > index; i--) {
-      void* destination = internal_node_cell(parent, i);
-      void* source = internal_node_cell(parent, i - 1);
-      memcpy(destination, source, INTERNAL_NODE_CELL_SIZE);
-    }
-    *internal_node_child(parent, index) = child_page_num;
-    *internal_node_key(parent, index) = child_max_key;
-  }
-}
